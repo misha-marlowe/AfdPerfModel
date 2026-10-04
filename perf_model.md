@@ -49,7 +49,7 @@ Both latencies depend on batch, context, placement, and kernels. AFD wins only w
 
 ## 2. Deriving the batch advantage
 
-Use request-parallel attention (TP=1) with expert weights sharded across all eight colocated GPUs, or across $N_F$ AFD GPUs. Non-expert weights are replicated on request-hosting GPUs. This makes the per-GPU batch definition consistent; an attention-TP layout needs different weight and KV accounting.
+Use request-parallel attention (TP=1) with expert weights sharded across all eight colocated GPUs, or across $N_F$ AFD GPUs. Non-expert weights are replicated on request-hosting GPUs. Each request runs attention on one GPU and keeps its KV cache there. The memory formulas below assume this placement.
 
 Let $U=\eta \cdot H$ be usable HBM, $W_{\mathrm{col}},W_{\mathrm{afd}}$ the resident non-offloaded weights per request-hosting GPU, $E$ the total offloaded expert-weight bytes, and $K(CL)$ the per-request cache/state bytes at context length $CL$. Then:
 
