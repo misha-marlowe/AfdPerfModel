@@ -28,6 +28,7 @@ def routed_bytes(layers, experts, hidden, intermediate, bytes_per_weight):
 MODELS = [
     Model("DeepSeek-V4.1-Flash (existing assumption)", Fraction(290 * 10**9)),
     Model("MiMo-V2.6-Flash (FP8)", Fraction(303 * 10**9)),
+    Model("GPT-OSS-120B (MXFP4; rounded with biases)", Fraction(61 * 10**9)),
     Model("DeepSeek-V4-Flash (FP4)", routed_bytes(43, 256, 4096, 2048, MXFP4_BYTES)),
     Model("DeepSeek-V4-Pro (FP4)", routed_bytes(61, 384, 7168, 3072, MXFP4_BYTES)),
     Model("Kimi K3 (MXFP4; formal only)", routed_bytes(92, 896, 3584, 3072, MXFP4_BYTES)),
