@@ -105,39 +105,16 @@ $$
 | 7:1 | 1.30 | 7/8 | $1.14\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
 | 6:2 | 1.30 | 6/8 | $0.98\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
 
-**For the 6:2 split, start with the total request counts.** Six AFD attention GPUs host requests, compared with all eight colocated GPUs. Using the expert bytes above, the ratio of total resident requests is:
+At 6:2, AFD hosts requests on six GPUs instead of eight. Its total request count relative to colocated serving is:
 
 $$
 \frac{6\cdot B_{\mathrm{afd}}}{8\cdot B_{\mathrm{col}}}
-=\frac{6}{8}\cdot r
-\approx97.65\%.
+=\frac{6}{8}\cdot r\approx97.65\%
 $$
 
-AFD therefore generates about 97.65% as many tokens per step. To match colocated throughput, it must finish each step in 97.65% of the time. Set $S=1$ to find this break-even point:
+To match throughput, AFD must finish each step in 97.65% of the time: **$100\%-97.65\%=2.35\%$ shorter steps**. For a 100 ms colocated step, AFD breaks even at 97.65 ms and wins below that.
 
-$$
-1=r\cdot p\cdot\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}
-\quad\Longrightarrow\quad
-\frac{T_{\mathrm{afd}}}{T_{\mathrm{col}}}=r\cdot p\approx97.65\%.
-$$
-
-The required percentage reduction in step latency is therefore:
-
-$$
-\frac{T_{\mathrm{col}}-T_{\mathrm{afd}}}{T_{\mathrm{col}}}\cdot100\%
-=(1-r\cdot p)\cdot100\%
-\approx100\%-97.65\%=2.35\%.
-$$
-
-For a 100 ms colocated step, AFD breaks even at about **97.65 ms**; shorter AFD steps produce a speedup.
-
-For example, if hiding MoE and communication makes AFD steps 20% shorter, $T_{\mathrm{afd}}=0.8\cdot T_{\mathrm{col}}$, giving $S\approx r\cdot p/0.8\approx1.22$ — a **22.1% speedup**. This is an illustrative latency assumption, not a measurement.
-
-At 7:1, AFD stores one expert-weight copy instead of the colocated baseline's two copies. Its single FFN GPU has about $244.8-227.15=17.65$ GB left within $H$ for additional allocations.
-
-Run `python3 capacity_comparison.py` to reproduce this table. The calculation uses unrounded expert bytes and ignores whole-request rounding.
-
-**For a given split, speedup depends on the latency ratio $T_{\mathrm{col}}/T_{\mathrm{afd}}$.** The next section estimates this ratio when AFD hides MoE and communication behind attention.
+Actual speedup depends on $T_{\mathrm{col}}/T_{\mathrm{afd}}$. The next section estimates this ratio when AFD hides MoE and communication.
 
 ## 4. The step-latency ratio when MoE and communication are hidden
 
