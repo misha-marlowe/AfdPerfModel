@@ -147,7 +147,7 @@ These are optimistic capacities: non-expert weights, per-request metadata, alloc
 
 ### Frontier-model comparison: DeepSeek V4, Kimi K3, and Qwen3.8
 
-Source configurations checked **2026-10-04**. Keep the same eight MI355X GPUs, $H=244.8$ GB/GPU, request-parallel attention with TP=1, and speculation disabled. Compare the same resident expert precision in both layouts. Include GPT-OSS-120B alongside the frontier models. The Qwen cases cover the large open text model, Flash-Next, and a separate dense-27B comparison below; multimodal encoders and generation are outside this analysis.
+Source configurations checked **2026-10-04**. Keep the same eight MI355X GPUs, $H=244.8$ GB/GPU, request-parallel attention with TP=1, and speculation disabled. Compare the same resident expert precision in both layouts. Include GPT-OSS-120B and the source study's MiniMax-M2.5 and Qwen3-235B-A22B alongside the frontier models. The Qwen3.8 cases cover the large open text model, Flash-Next, and a separate dense-27B comparison below; multimodal encoders and generation are outside this analysis.
 
 First compare the **capacity ratios and latency needed to win**. These do not require assuming a particular KV-cache implementation: $K(CL)$ cancels before rounding. Absolute batches still require each backend's cache/state bytes, including recurrent state for hybrid models. The cache budgets below can be substituted into $B^{\max}=\lfloor\text{cache bytes}/K(CL)\rfloor$ at any supported context. They are not measured request capacities.
 
@@ -158,6 +158,8 @@ For each model, multiply MoE layers, routed experts per layer, three expert matr
 | Model and official configuration | Routed parameter calculation | Routed parameters, billions | Resident expert assumption | $E$, GB |
 |---|---|---:|---|---:|
 | [GPT-OSS-120B](https://huggingface.co/openai/gpt-oss-120b/blob/main/config.json) | $36 \cdot 128 \cdot 3 \cdot 2880 \cdot 2880$ | 114.662 | MXFP4 + block scales + BF16 expert biases, rounded | 61.00 |
+| [MiniMax-M2.5](https://huggingface.co/MiniMaxAI/MiniMax-M2.5/blob/main/config.json) | $62 \cdot 256 \cdot 3 \cdot 3072 \cdot 1536$ | 224.680 | FP8 + assumed FP32 block scales | 224.74 |
+| [Qwen3-235B-A22B-FP8](https://huggingface.co/Qwen/Qwen3-235B-A22B-FP8/blob/main/config.json) | $94 \cdot 128 \cdot 3 \cdot 4096 \cdot 1536$ | 227.096 | FP8 + assumed FP32 block scales | 227.15 |
 | [DeepSeek-V4-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/main/config.json) | $43 \cdot 256 \cdot 3 \cdot 4096 \cdot 2048$ | 277.025 | FP4 + block scales | 147.17 |
 | [DeepSeek-V4-Pro](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/config.json) | $61 \cdot 384 \cdot 3 \cdot 7168 \cdot 3072$ | 1,547.396 | FP4 + block scales | 822.05 |
 | [Kimi K3](https://huggingface.co/moonshotai/Kimi-K3/blob/main/config.json) | $92 \cdot 896 \cdot 3 \cdot 3584 \cdot 3072$ | 2,722.741 | MXFP4 + block scales | 1,446.46 |
@@ -167,6 +169,8 @@ For each model, multiply MoE layers, routed experts per layer, three expert matr
 DeepSeek's [reference implementation](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/inference/model.py) stores two FP4 weights per byte plus one one-byte scale per 32 weights. K3's configuration also specifies four-bit weights with one-byte scales per group of 32. Thus these estimates use $0.5+1/32=0.53125$ bytes per routed parameter, before backend padding or duplicate weight copies. K3's expert input width is its **3,584-dimensional latent MoE width**, not the 7,168-dimensional residual stream; its first layer is dense.
 
 For GPT-OSS-120B, assume experts remain packed in MXFP4 at runtime. Its [weight decoder](https://github.com/openai/gpt-oss/blob/main/gpt_oss/torch/weights.py) uses 32-weight blocks with one-byte scales, giving 60.914 GB for the expert matrices. The [expert bias shapes](https://github.com/openai/gpt-oss/blob/main/gpt_oss/torch/model.py) add $36\cdot128\cdot(2\cdot2880+2880)\cdot2=0.0796$ GB in BF16; round the total to $E=61$ GB. This is a packed-resident sizing assumption, not the allocation of the PyTorch reference, which expands expert matrices to BF16. The colocated comparison keeps experts sharded across all eight GPUs, as in the other MoE rows; eight independent full-model replicas would require different memory and latency accounting.
+
+MiniMax-M2.5 and Qwen3-235B-A22B-FP8 are the two checkpoints evaluated in the source study. Both configurations specify FP8 weights with $128\times128$ blocks. Assume a four-byte scale per block, giving $1+4/(128\cdot128)$ bytes per routed parameter: $E=224.735330304$ GB and $227.151839232$ GB respectively, before backend padding. Calculations use these unrounded values; MiniMax's MTP layers are excluded. **These rows recalculate capacity for our eight-MI355X, colocated EP=8 setup.** The source study instead measured a 1.5 batch ratio on GB200 with a colocated EP=4 baseline and four GPUs per FFN node. Its batch ratio and measured throughput gains do not transfer directly to this table.
 
 For Flash-Next, the [official FP8 configuration](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8/blob/main/config.json) uses $128\times128$ weight blocks. FP32 block scales would add about 0.029 GB to its 120.796 GB of routed weights; $E=121$ GB covers that allowance. Assume its additional **51B n-gram embedding is host-resident in both layouts**, as supported by the [vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next). Include host-lookup stalls in latency if they are exposed.
 
@@ -189,6 +193,8 @@ This is a **memory lower bound on $N_F$**, not a recommended split. FFN workspac
 | DeepSeek-V4.1-Flash, earlier 290 GB assumption | 208.55 | 1.174 | 6:2 | 0.750 | 0.880 | **>12.0%** |
 | MiMo-V2.6-Flash, FP8 | 206.93 | 1.183 | 6:2 | 0.750 | 0.887 | **>11.3%** |
 | GPT-OSS-120B, MXFP4 | 237.18 | 1.032 | 7:1 | 0.875 | 0.903 | **>9.7%** |
+| MiniMax-M2.5, FP8 | 216.71 | 1.130 | 7:1 | 0.875 | 0.988 | **>1.2%** |
+| Qwen3-235B-A22B, FP8 | 216.41 | 1.131 | 7:1 | 0.875 | 0.990 | **>1.0%** |
 | DeepSeek-V4-Flash, FP4 | 226.40 | 1.081 | 7:1 | 0.875 | 0.946 | **>5.4%** |
 | DeepSeek-V4-Pro, FP4 | 142.04 | 1.723 | 4:4 | 0.500 | 0.862 | **>13.8%** |
 | Kimi K3, MXFP4 — formal only; TP=1 baseline does not fit | 63.99 | 3.825 | 2:6 | 0.250 | 0.956 | >4.4%, **not actionable for this layout** |
@@ -203,6 +209,8 @@ Adding one FFN GPU makes the required latency reduction much larger:
 | Model / format | Minimum split | Space left per FFN GPU after routed weights, GB | Split with one extra FFN GPU | Required step-latency reduction at that split |
 |---|---:|---:|---:|---:|
 | GPT-OSS-120B, MXFP4 | 7:1 | 183.80 | 6:2 | >22.6% |
+| MiniMax-M2.5, FP8 | 7:1 | 20.06 | 6:2 | >15.3% |
+| Qwen3-235B-A22B, FP8 | 7:1 | 17.65 | 6:2 | >15.2% |
 | DeepSeek-V4-Flash, FP4 | 7:1 | 97.63 | 6:2 | >18.9% |
 | DeepSeek-V4-Pro, FP4 | 4:4 | 39.29 | 3:5 | >35.4% |
 | Kimi K3, MXFP4 — formal only | 2:6 | 3.72 | 1:7 | >52.2% |
@@ -230,6 +238,7 @@ $$
 Colocated serving already leaves $8\cdot H-E$ bytes for request caches across the node. AFD leaves $(8-N_F)\cdot H$ on attention GPUs; spare FFN memory is unavailable to requests in this placement. **A win therefore requires faster decode steps**, through more efficient expert execution and overlap. This conclusion specifically assumes sharded routed weights and omitted non-expert weights; replicated dense FFNs differ, as discussed below.
 
 - **GPT-OSS-120B:** At 7:1, its 3.2% per-attention-GPU batch gain requires 9.7% shorter steps to offset the FFN GPU. One FFN GPU has ample weight capacity, but must sustain requests from seven attention GPUs. At 6:2, the required reduction rises to 22.6%. Compared with V4-Flash at the same 7:1 split, its smaller batch ratio makes the latency target harder.
+- **MiniMax-M2.5 and Qwen3-235B-A22B, FP8:** Their minimum 7:1 splits have small latency hurdles: 1.2% and 1.0%, respectively. Each FFN GPU retains almost the entire usable weight budget, leaving about 20.06 GB and 17.65 GB for additional allocations. These are attractive capacity thresholds if one FFN GPU can fit the runtime and keep up; at 6:2 the required reductions rise to 15.3% and 15.2%. The source study's measured wins justify investigation, but do not validate these MI355X splits.
 - **DeepSeek-V4-Flash:** A useful first candidate under this model: 7:1 needs only a 5.4% step reduction. The main question is whether one GPU can serve the experts for seven attention GPUs without exposing FFN time. If two FFN GPUs are needed, the target becomes 18.9%.
 - **Qwen3.8-Flash-Next, FP8:** Another useful candidate: 7:1 needs 6.7% shorter steps and has substantial expert-side memory headroom. Measure recurrent-attention work, host n-gram lookup, and FFN service capacity. The BF16 row's 0.2% target is fragile because only 3.21 GB remains for FFN allocations.
 - **DeepSeek-V4-Pro:** Worth profiling if the colocated step spends a large fraction in routed MoE. Its 72.3% per-attention-GPU batch expansion still needs 13.8% shorter steps with half the GPUs assigned to FFN. The larger batch also raises attention-side work.

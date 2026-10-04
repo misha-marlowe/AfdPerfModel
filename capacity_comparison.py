@@ -13,6 +13,7 @@ from math import ceil
 H = Fraction(2448, 10) * 10**9
 N = 8
 MXFP4_BYTES = Fraction(1, 2) + Fraction(1, 32)
+FP8_BLOCK_BYTES = 1 + Fraction(4, 128 * 128)  # Assumed FP32 block scales.
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,8 @@ MODELS = [
     Model("DeepSeek-V4.1-Flash (existing assumption)", Fraction(290 * 10**9)),
     Model("MiMo-V2.6-Flash (FP8)", Fraction(303 * 10**9)),
     Model("GPT-OSS-120B (MXFP4; rounded with biases)", Fraction(61 * 10**9)),
+    Model("MiniMax-M2.5 (FP8)", routed_bytes(62, 256, 3072, 1536, FP8_BLOCK_BYTES)),
+    Model("Qwen3-235B-A22B (FP8)", routed_bytes(94, 128, 4096, 1536, FP8_BLOCK_BYTES)),
     Model("DeepSeek-V4-Flash (FP4)", routed_bytes(43, 256, 4096, 2048, MXFP4_BYTES)),
     Model("DeepSeek-V4-Pro (FP4)", routed_bytes(61, 384, 7168, 3072, MXFP4_BYTES)),
     Model("Kimi K3 (MXFP4; formal only)", routed_bytes(92, 896, 3584, 3072, MXFP4_BYTES)),
