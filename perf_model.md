@@ -112,7 +112,7 @@ $$
 =\frac{6}{8}\cdot r\approx97.65\%
 $$
 
-To match throughput, AFD must finish each step in 97.65% of the time: **$100\%-97.65\%=2.35\%$ shorter steps**. For a 100 ms colocated step, AFD breaks even at 97.65 ms and wins below that.
+To match colocated throughput, AFD needs **2.35% lower step latency** (100% − 97.65% = 2.35%). For a 100 ms colocated step, AFD matches throughput at 97.65 ms, wins with shorter steps, and loses with longer steps.
 
 Actual speedup depends on $T_{\mathrm{col}}/T_{\mathrm{afd}}$. The next section estimates this ratio when AFD hides MoE and communication.
 
