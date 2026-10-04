@@ -29,12 +29,16 @@ Therefore:
 
 $$
 \boxed{S=\frac{\mathrm{tput}_{\mathrm{afd}}}{\mathrm{tput}_{\mathrm{col}}}
-=\underbrace{\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}}_{\text{batch expansion}}
-\cdot \underbrace{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}_{\text{step-latency ratio}}
-\cdot \underbrace{\frac{N_A}{N}}_{p:\ \text{attention GPU fraction}}}
+=\underbrace{\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}\vphantom{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}}_{\textbf{batch expansion}}
+\cdot \underbrace{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}\vphantom{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}}_{\textbf{step-latency ratio}}
+\cdot \underbrace{\frac{N_A}{N}\vphantom{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}}_{\textbf{attention GPU fraction}}}
 $$
 
-Moving expert weights off attention GPUs frees memory for KV cache and can increase $\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}$. Aggregation and overlap can improve the latency ratio, although larger batches and microbatch overhead increase attention-side time. The fraction $p$ charges AFD for FFN GPUs that host no requests. This accounting follows [FastAFD](https://haoailab.com/blogs/fastafd/#where-the-speedup-comes-from).
+- **Batch expansion — $\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}$:** Moving expert weights off attention GPUs frees memory for KV cache, allowing more resident requests per attention GPU.
+- **Step-latency ratio — $\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}$:** **Aggregation** means combining routed tokens from multiple attention GPUs into larger batches for each FFN expert, which can make its matrix multiplications more efficient. Overlap lets attention on one microbatch run while another uses the FFN pool. These mechanisms can reduce AFD step latency, while larger batches and repeated microbatch work can increase it.
+- **Attention GPU fraction — $\frac{N_A}{N}$:** Define $p=\frac{N_A}{N}$. This factor counts the FFN GPUs in the total GPU budget even though they host no requests; for a 6:2 split, $p=6/8=0.75$.
+
+This accounting follows [FastAFD](https://haoailab.com/blogs/fastafd/#where-the-speedup-comes-from).
 
 Both latencies depend on batch, context, placement, and kernels. AFD wins only when $T_{\mathrm{afd}}<\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}} \cdot p \cdot T_{\mathrm{col}}$; memory capacity alone does not establish a speedup.
 
