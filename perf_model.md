@@ -75,7 +75,9 @@ $$
 
 Longer context lowers both capacity-limited batches through $K(CL)$. In this simplified equal-cache-layout model, $K(CL)$ cancels from their ratio: **$r$ need not grow with context**. Admission limits, different cache layouts, buffer growth, or rounding can change it. Actual batches may be below these memory ceilings.
 
-## 3. Concrete capacity example: DeepSeek-V4.1-Flash
+## 3. Concrete capacity examples
+
+### DeepSeek-V4.1-Flash
 
 The [official configuration](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/main/config.json) specifies 40 backbone layers, hidden size 5,120, expert intermediate size 2,304, 384 routed experts per layer, and FP4 expert weights. Each SwiGLU expert has three matrices, giving:
 
@@ -111,6 +113,38 @@ These are optimistic memory ceilings, not recommended serving batches. At 128K, 
 
 This example assumes host Engram access remains covered by the runtime. If it stalls, include that delay in step latency. DeepSeek's sparse attention also means stored KV bytes are not automatically bytes read on every step.
 
+### MiMo-V2.6-Flash
+
+Use the official **MiMo-V2.6-Flash-RL** checkpoint as the reference. Its [model card](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-RL#4-model-architecture) specifies 9 global-attention layers and 39 sliding-window layers. Global attention has 4 KV heads; sliding-window attention has 8. Keys have 192 channels and values 128; the sliding window retains 128 tokens. The [configuration](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-RL/blob/main/config.json) specifies 47 MoE layers, 256 routed experts per layer, hidden size 4,096, and expert intermediate size 2,048.
+
+Keep $N=8$, $H=244.8$ GB/GPU, attention TP=1, and the 6:2 AFD split. Assume **FP8 KV cache and FP8-resident routed weights**, text decode, and no speculative decoder. The [vLLM recipe](https://recipes.vllm.ai/XiaomiMiMo/MiMo-V2.6-Flash-RL) describes FP8 computation with MXFP4 checkpoint storage and uses FP8 KV cache in its AMD example. The checkpoint's disk size is not the assumed resident weight size here.
+
+Routed expert parameters and the memory budget are:
+
+$$
+P_{\rm routed}=47 \cdot 256 \cdot 3 \cdot 4096 \cdot 2048
+=302{,}795{,}194{,}368
+$$
+
+At one byte per FP8 weight, this is 302.80 GB before scales. Use $E=303$ GB, rounding up to allow for block scales. The cache budgets are then $H-E/N=206.925$ GB for colocated GPUs and $H=244.8$ GB for attention GPUs.
+
+With one byte per cached element, the per-request KV bytes are:
+
+$$
+K(CL)=9 \cdot 4 \cdot (192+128) \cdot CL
++39 \cdot 8 \cdot (192+128) \cdot \min(CL,128)
+$$
+
+For the contexts below, $K(CL)=11{,}520 \cdot CL+12{,}779{,}520$ bytes. The second term is the bounded sliding-window cache; it does not grow with context.
+
+| Context tokens | Cache/state MB per request | $B_{\mathrm{col}}^{\max}$ | $B_{\mathrm{afd}}^{\max}$ | $B_{\mathrm{afd}}/B_{\mathrm{col}}$ |
+|---:|---:|---:|---:|---:|
+| 32,768 | 390.27 | 530 | 627 | 1.183 |
+| 131,072 | 1,522.73 | 135 | 160 | 1.185 |
+| 1,048,576 | 12,092.38 | 17 | 20 | 1.176 |
+
+These are optimistic capacities: non-expert weights, per-request metadata, allocator padding, and extra retained KV blocks are omitted. The cache formula assumes separate 192-channel keys and 128-channel values, with expired sliding-window KV reclaimed. A backend that pads values or retains more history needs a larger $K(CL)$. FP8 cache scale overhead is also omitted. BF16 KV cache doubles the raw cache bytes; retaining packed MXFP4 experts instead changes $E$ and requires recalculation. Two FFN GPUs hold about 151.5 GB of expert weights each; fitting weights does not establish sufficient FFN throughput.
+
 ## 4. Speedup when FFN and communication are hidden
 
 Decompose the measured colocated step at $B_{\mathrm{col}}$:
@@ -134,7 +168,7 @@ $$
 
 This assumes attention time scales with batch, small-kernel costs scale with microbatch count, and the remote path stays overlapped. The source study established this approximation on its GB200 workloads; **MI355X and V4.1 Flash require their own calibration**, especially for sparse attention and Engram.
 
-Using $r=244.8/208.55\approx1.17382$, the following are **hypothetical timing scenarios**, not benchmark results. Each baseline step is 100 ms; hidden-path feasibility is assumed in each row.
+Using the DeepSeek example's $r=244.8/208.55\approx1.17382$, the following are **hypothetical timing scenarios**, not benchmark results. Each baseline step is 100 ms; hidden-path feasibility is assumed in each row.
 
 | Scenario | $N_A:N_F$ (GPUs) | $m$ | Baseline att/dense/MoE (ms) | $T_{\mathrm{afd}}^{\rm hidden}$ (ms) | Speedup |
 |---|---:|---:|---:|---:|---:|
