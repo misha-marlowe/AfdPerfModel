@@ -24,7 +24,7 @@ def main():
     print(f"Expert weights: {float(EXPERT_BYTES / 10**9):.2f} GB")
     print(f"Colocated cache per GPU: {float(col_cache / 10**9):.2f} GB")
     print(f"AFD cache per attention GPU: {float(H / 10**9):.1f} GB\n")
-    print("| AFD attention:FFN GPUs | Batch ratio r | Attention fraction p | Projected speedup including step latency |")
+    print("| AFD attention:FFN GPUs | Batch ratio r | FFN GPU penalty p | Throughput speedup S |")
     print("|---|---:|---:|---:|")
     for nf in (1, 2):
         p = Fraction(N - nf, N)
