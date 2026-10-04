@@ -1,75 +1,35 @@
-"""Reproduce Section 3's analytical ratios; no measured performance inputs.
+"""Reproduce Section 3's Qwen3-235B-A22B-FP8 projection.
 
+Eight MI355X GPUs; colocated serving uses two independent DP=4/EP=4
+groups with attention TP=1. Assume equal decode-step latency in AFD.
+Dimensions and source links are in perf_model.md. GB is decimal.
+Non-expert weights, backend padding, and whole-request rounding are omitted.
 Run: python3 capacity_comparison.py
-Dimensions, precision assumptions, and source links are in perf_model.md.
-GB is decimal. Non-expert weights and FFN buffers are omitted in this screen.
 """
 
-from dataclasses import dataclass
 from fractions import Fraction
-from math import ceil
 
 
 H = Fraction(2448, 10) * 10**9
 N = 8
-MXFP4_BYTES = Fraction(1, 2) + Fraction(1, 32)
+EP_COL = 4
 FP8_BLOCK_BYTES = 1 + Fraction(4, 128 * 128)  # Assumed FP32 block scales.
-
-
-@dataclass(frozen=True)
-class Model:
-    name: str
-    expert_bytes: Fraction
-
-
-def routed_bytes(layers, experts, hidden, intermediate, bytes_per_weight):
-    return layers * experts * 3 * hidden * intermediate * Fraction(bytes_per_weight)
-
-
-MODELS = [
-    Model("DeepSeek-V4.1-Flash (existing assumption)", Fraction(290 * 10**9)),
-    Model("MiMo-V2.6-Flash (FP8)", Fraction(303 * 10**9)),
-    Model("GPT-OSS-120B (MXFP4; rounded with biases)", Fraction(61 * 10**9)),
-    Model("MiniMax-M2.5 (FP8)", routed_bytes(62, 256, 3072, 1536, FP8_BLOCK_BYTES)),
-    Model("Qwen3-235B-A22B (FP8)", routed_bytes(94, 128, 4096, 1536, FP8_BLOCK_BYTES)),
-    Model("DeepSeek-V4-Flash (FP4)", routed_bytes(43, 256, 4096, 2048, MXFP4_BYTES)),
-    Model("DeepSeek-V4-Pro (FP4)", routed_bytes(61, 384, 7168, 3072, MXFP4_BYTES)),
-    Model("Kimi K3 (MXFP4; formal only)", routed_bytes(92, 896, 3584, 3072, MXFP4_BYTES)),
-    Model("Qwen3.8-Flash-Next (FP8; rounded)", Fraction(121 * 10**9)),
-    Model("Qwen3.8-Flash-Next (BF16)", routed_bytes(48, 512, 2560, 640, 2)),
-    Model("Qwen3.8-2.4T (hypothetical MXFP4)", routed_bytes(92, 512, 8192, 2048, MXFP4_BYTES)),
-    Model("Qwen3.8-2.4T (FP8; before scales)", routed_bytes(92, 512, 8192, 2048, 1)),
-    Model("Qwen3.8-2.4T (BF16)", routed_bytes(92, 512, 8192, 2048, 2)),
-]
+EXPERT_BYTES = 94 * 128 * 3 * 4096 * 1536 * FP8_BLOCK_BYTES
 
 
 def main():
-    print("| Model | E GB | Col cache GB | r | A:F | p | r · p | Required step reduction |")
-    print("|---|---:|---:|---:|---:|---:|---:|---:|")
-    for model in MODELS:
-        e = model.expert_bytes
-        nf = ceil(e / H)
-        if e >= N * H or nf >= N:
-            print(f"| {model.name} | {float(e / 10**9):,.2f} | — | — | No fit | — | — | — |")
-            continue
-        budget = H - e / N
-        r = H / budget
+    col_cache = H - EXPERT_BYTES / EP_COL
+    r = H / col_cache
+    print(f"Expert weights: {float(EXPERT_BYTES / 10**9):.9f} GB")
+    print(f"Colocated cache per GPU: {float(col_cache / 10**9):.9f} GB")
+    print(f"AFD cache per attention GPU: {float(H / 10**9):.1f} GB\n")
+    print("| AFD attention:FFN GPUs | Batch ratio r | Attention fraction p | Projected speedup at equal step latency |")
+    print("|---|---:|---:|---:|")
+    for nf in (1, 2):
         p = Fraction(N - nf, N)
-        print(f"| {model.name} | {float(e / 10**9):,.2f} | {float(budget / 10**9):,.2f} "
-              f"| {float(r):.3f} | {N-nf}:{nf} | {float(p):.3f} | {float(r*p):.3f} "
-              f"| >{float((1-r*p)*100):.1f}% |")
-
-    print("\n| Model | Minimum A:F | FFN GB remaining/GPU | One more FFN GPU | Required step reduction |")
-    print("|---|---:|---:|---:|---:|")
-    for model in MODELS:
-        e = model.expert_bytes
-        nf = ceil(e / H)
-        if nf >= N - 1:
-            continue
-        r = H / (H - e / N)
-        next_p = Fraction(N - nf - 1, N)
-        print(f"| {model.name} | {N-nf}:{nf} | {float((H-e/nf)/10**9):.2f} "
-              f"| {N-nf-1}:{nf+1} | >{float((1-r*next_p)*100):.1f}% |")
+        speedup = r * p
+        print(f"| {N-nf}:{nf} | {float(r):.3f} | {N-nf}/{N} "
+              f"| {float(speedup):.3f}× ({float((speedup-1)*100):+.1f}%) |")
 
 
 if __name__ == "__main__":
