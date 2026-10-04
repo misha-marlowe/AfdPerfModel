@@ -31,7 +31,7 @@ $$
 \boxed{S=\frac{\mathrm{tput}_{\mathrm{afd}}}{\mathrm{tput}_{\mathrm{col}}}
 =\underbrace{\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}}_{r:\ \text{batch expansion}}
 \cdot \underbrace{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}_{\text{step-latency ratio}}
-\cdot \underbrace{\frac{N_A}{N}}_{p:\ \text{attention GPU fraction}}.}
+\cdot \underbrace{\frac{N_A}{N}}_{p:\ \text{attention GPU fraction}}}
 $$
 
 Removing expert weights can increase $r$. Aggregation and overlap can improve the latency ratio, although larger batches and microbatch overhead increase attention-side time. The fraction $p$ charges AFD for FFN GPUs that host no requests. This accounting follows [FastAFD](https://haoailab.com/blogs/fastafd/#where-the-speedup-comes-from).
