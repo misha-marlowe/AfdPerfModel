@@ -34,13 +34,13 @@ $$
 \cdot \underbrace{\frac{N_A}{N}\vphantom{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}}_{\textbf{attention GPU fraction}}}
 $$
 
-- **Batch expansion — $\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}$:** Moving expert weights off attention GPUs frees memory for KV cache, allowing more resident requests per attention GPU.
+- **$r=\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}$ — batch expansion:** Moving expert weights off attention GPUs frees memory for KV cache, allowing more resident requests per attention GPU.
 - **Step-latency ratio — $\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}$:** **Aggregation** means combining routed tokens from multiple attention GPUs into larger batches for each FFN expert, which can make its matrix multiplications more efficient. Overlap lets attention on one microbatch run while another uses the FFN pool. These mechanisms can reduce AFD step latency, while larger batches and repeated microbatch work can increase it.
 - **Attention GPU fraction — $\frac{N_A}{N}$:** Define $p=\frac{N_A}{N}$. This factor counts the FFN GPUs in the total GPU budget even though they host no requests; for a 6:2 split, $p=6/8=0.75$.
 
 This accounting follows [FastAFD](https://haoailab.com/blogs/fastafd/#where-the-speedup-comes-from).
 
-Both latencies depend on batch, context, placement, and kernels. AFD wins only when $T_{\mathrm{afd}}<\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}} \cdot p \cdot T_{\mathrm{col}}$; memory capacity alone does not establish a speedup.
+Both latencies depend on batch, context, placement, and kernels. AFD wins only when $T_{\mathrm{afd}}<r \cdot p \cdot T_{\mathrm{col}}$; memory capacity alone does not establish a speedup.
 
 ## 2. Deriving the batch advantage
 
@@ -63,10 +63,10 @@ There is **no extra division of $B_{\mathrm{col}}$ by $N$**: $B_{\mathrm{col}}$ 
 With equal $W_{\mathrm{col}}=W_{\mathrm{afd}}=W$ and ignoring integer rounding:
 
 $$
-\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}\approx\frac{U-W}{U-W-E/N}.
+r\approx\frac{U-W}{U-W-E/N}.
 $$
 
-Longer context lowers both capacity-limited batches through $K(CL)$. In this simplified equal-cache-layout model, $K(CL)$ cancels from their ratio: **$\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}$ need not grow with context**. Admission limits, different cache layouts, buffer growth, or rounding can change it. Actual batches may be below these memory ceilings.
+Longer context lowers both capacity-limited batches through $K(CL)$. In this simplified equal-cache-layout model, $K(CL)$ cancels from their ratio: **$r$ need not grow with context**. Admission limits, different cache layouts, buffer growth, or rounding can change it. Actual batches may be below these memory ceilings.
 
 ## 3. Concrete capacity example: DeepSeek-V4.1-Flash
 
@@ -115,19 +115,19 @@ $$
 Here $T_{\rm MoE}$ covers only the expert path that will move to FFN GPUs, including its dispatch/combine. $T_{\rm dense}$ collects remaining request-side work, including shared-expert execution if retained there. With $m$ microbatches, the blog's approximation is:
 
 $$
-A\equiv T_{\mathrm{afd}}^{\rm hidden}\approx \frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}} \cdot T_{\rm att}+m \cdot T_{\rm dense},
+A\equiv T_{\mathrm{afd}}^{\rm hidden}\approx r \cdot T_{\rm att}+m \cdot T_{\rm dense},
 $$
 
 $$
 \boxed{S_{\rm hidden}\approx
-\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}} \cdot p \cdot
+r \cdot p \cdot
 \frac{T_{\rm att}+T_{\rm dense}+T_{\rm MoE}}
-{\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}} \cdot T_{\rm att}+m \cdot T_{\rm dense}}}
+{r \cdot T_{\rm att}+m \cdot T_{\rm dense}}}
 $$
 
 This assumes attention time scales with batch, small-kernel costs scale with microbatch count, and the remote path stays overlapped. FastAFD established this approximation on its GB200 workloads; **MI355X and V4.1 Flash require their own calibration**, especially for sparse attention and Engram. [FastAFD latency model](https://haoailab.com/blogs/fastafd/#predicting-the-gb200-speedup)
 
-Using $\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}=224.8/188.55\approx1.19226$, the following are **hypothetical timing scenarios**, not benchmark results. Each baseline step is 100 ms; hidden-path feasibility is assumed in each row.
+Using $r=224.8/188.55\approx1.19226$, the following are **hypothetical timing scenarios**, not benchmark results. Each baseline step is 100 ms; hidden-path feasibility is assumed in each row.
 
 | Scenario | $N_A:N_F$ (GPUs) | $m$ | Baseline att/dense/MoE (ms) | $T_{\mathrm{afd}}^{\rm hidden}$ (ms) | Speedup |
 |---|---:|---:|---:|---:|---:|
@@ -137,7 +137,7 @@ Using $\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}=224.8/188.55\approx1.19226$, th
 | More GPUs dedicated to FFN | 4:4 | 2 | 40 / 10 / 50 | 67.69 | **0.881×** |
 | Extra microbatches without extra hiding | 6:2 | 4 | 40 / 10 / 50 | 87.69 | **1.020×** |
 
-At 6:2, $\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}} \cdot p\approx0.8942$, so AFD must reduce step latency by more than **10.6%** just to break even. More FFN GPUs can make overlap feasible, but reduce the fraction hosting requests.
+At 6:2, $r \cdot p\approx0.8942$, so AFD must reduce step latency by more than **10.6%** just to break even. More FFN GPUs can make overlap feasible, but reduce the fraction hosting requests.
 
 ## 5. When FFN or communication becomes exposed
 
@@ -145,7 +145,7 @@ For a simplified uniform pipeline, let $F,D,R$ be whole-step FFN, dispatch, and 
 
 $$
 T_{\mathrm{afd}}\gtrsim\max\left(A,F,D,R,\frac{A+D+F+R}{m}\right),
-\qquad S=\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}} \cdot p \cdot \frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}.
+\qquad S=r \cdot p \cdot \frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}.
 $$
 
 The last term covers microbatch dependency cycles. Add fill/drain, synchronization, and imbalance delays for a practical estimate. This extension assumes independent stage resources and no double-counting of fused work; if both transfer directions serialize on one resource, also include its $D+R$ service constraint.
