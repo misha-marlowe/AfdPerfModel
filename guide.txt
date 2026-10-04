@@ -1,0 +1,60 @@
+Please create perf_model.md file with this blog-based performance model. Keep it consise, but informative, easy to follow. Assume 8-GPU MI355X node. Start with geenral formulas as in atached and explain sources of speedup. Then explain how afd gets batch size advantage and show concrete example from ds v4.1 flash. Then show speedup formula for when moe  and comm is hidden. Show several examples speedsup for a few interesting scenarios.
+
+t_col = B_vLLM / T_vLLM
+
+tp_col = (B_vLLM * N) / (N * T_vLLM)
+
+T_vLLM = decode step latency
+
+N = N_A + N_F
+
+N   = total GPUs
+N_A = GPUs for attention
+N_F = GPUs for MoE
+
+tp_AFD = (B_AFD * N_A) / ((N_A + N_F) * T_AFD)
+
+tp_AFD / tp_col
+  = (B_AFD * N_A * N * T_vLLM)
+    / ((N_A + N_F) * T_AFD * B_vLLM * N)
+
+  = (B_AFD / B_vLLM)
+    * (T_vLLM / T_AFD)
+    * (N_A / (N_A + N_F))
+
+Factor 1: B_AFD / B_vLLM
+AFD allows a bigger batch per GPU since it doesn't hold
+MoE weights.
+
+Factor 2: T_vLLM / T_AFD
+[No explanation written.]
+
+Factor 3: N_A / (N_A + N_F)
+This is the cost of AFD: overhead due to extra N_F GPUs
+used for MoE.
+
+B_AFD / B_vLLM is a function of the model and context
+length as CL increases.
+
+For B_vLLM, assume N GPUs, and each GPU hosts 1/N of
+the MoE weights and attention.
+
+(B_vLLM / N) * S_att(CL) + S_MoE / N < S_mem
+
+From here, we can compute max ...
+[Text cut off at the bottom.]
+
+
+
+For AFD, B_AFD is bigger.
+
+B_AFD / N_A < S_mem
+[Denominator unclear; appears to be N_A.
+ Formula transcribed as written.]
+
+T_vLLM(B_vLLM) = T_att + T_dense + T_MoE
+
+T_AFD = T_att * (B_AFD / B_vLLM) + m * T_dense
+
+Annotation pointing to T_AFD:
+[higher - handwriting unclear]
