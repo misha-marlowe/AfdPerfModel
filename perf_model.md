@@ -32,9 +32,9 @@ Therefore:
 $$
 \boxed{S=\frac{\mathrm{tput}_{\mathrm{afd}}}{\mathrm{tput}_{\mathrm{col}}}
 =\begin{array}{ccccc}
-\displaystyle\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}
-&\cdot&\displaystyle\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}
-&\cdot&\displaystyle\frac{N_A}{N}\\
+\underbrace{\displaystyle\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}}
+&\cdot&\underbrace{\displaystyle\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}
+&\cdot&\underbrace{\displaystyle\frac{N_A}{N}}\\
 \textbf{batch expansion}&&\textbf{step-latency ratio}&&\textbf{attention GPU fraction}
 \end{array}}
 $$
