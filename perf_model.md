@@ -10,7 +10,15 @@ Let $N=N_A+N_F=8$, where $N_A$ GPUs run attention and $N_F$ run FFN/MoE. Define:
 - $B_{\mathrm{afd}}$: resident requests **per attention GPU**.
 - $T_{\mathrm{col}},T_{\mathrm{afd}}$: wall-clock latency of a complete decode step, across all layers and microbatches, at each system's own batch size.
 
-The global batches are $N \cdot B_{\mathrm{col}}$ and $N_A \cdot B_{\mathrm{afd}}$. Define $\mathrm{tput}$ as output-token throughput per GPU, measured in **output tokens/s/GPU** and counting every allocated GPU, including FFN GPUs. With step latencies expressed in seconds:
+Define $\mathrm{tput}$ as output-token throughput per GPU, measured in **output tokens/s/GPU**. Since each decode step generates one token per active request, **per-GPU throughput is the global batch size divided by the total decode-step latency, then divided by the total number of allocated GPUs**, including FFN GPUs:
+
+$$
+\mathrm{tput}
+=\frac{\text{global batch size}}{\text{total decode-step latency (s)}}
+\cdot\frac{1}{\text{total GPU count}}.
+$$
+
+The global batch counts requests across all request-hosting GPUs: $N \cdot B_{\mathrm{col}}$ for colocated serving and $N_A \cdot B_{\mathrm{afd}}$ for AFD. Substituting these batches, with step latencies expressed in seconds:
 
 $$
 \mathrm{tput}_{\mathrm{col}}=\frac{N \cdot B_{\mathrm{col}}}{N \cdot T_{\mathrm{col}}}=\frac{B_{\mathrm{col}}}{T_{\mathrm{col}}},\qquad
