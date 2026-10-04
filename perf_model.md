@@ -29,7 +29,7 @@ $$
 
 Therefore:
 
-![AFD throughput speedup: S = (tput_afd / tput_col) = (B_afd / B_col) · (T_col / T_afd) · (N_A / N). The factors are batch expansion, step-latency ratio, and the FFN GPU penalty.](assets/afd-speedup.svg)
+<img src="assets/afd-speedup.svg" width="720" alt="AFD throughput speedup: S = (tput_afd / tput_col) = (B_afd / B_col) · (T_col / T_afd) · (N_A / N). The factors are batch expansion, step-latency ratio, and the FFN GPU penalty.">
 
 Let’s break down these ratios:
 
