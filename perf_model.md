@@ -130,11 +130,10 @@ $$
 - $T_{\rm dense}$: remaining request-side work, including projections, routing, norms, KV updates, and any retained shared experts.
 - $T_{\rm MoE}$: the expert path moved to FFN GPUs, including dispatch and combine.
 
-With $m$ microbatches, estimate the remaining attention-side time as $A$:
+With $m$ microbatches, estimate the remaining attention-side time:
 
 $$
-T_{\mathrm{afd}}^{\rm hidden}\approx A
-=r\cdot T_{\rm att}+m\cdot T_{\rm dense}.
+T_{\mathrm{afd}}^{\rm hidden}\approx r\cdot T_{\rm att}+m\cdot T_{\rm dense}.
 $$
 
 The factor $r$ accounts for the larger batch: this approximation assumes attention time grows in proportion to KV traffic. The factor $m$ accounts for repeating the small request-side kernels for each microbatch. Thus the latency ratio is:
@@ -158,19 +157,4 @@ $$
 S\approx r\cdot p\cdot\frac{100}{72.08}\approx1.35.
 $$
 
-The latency improvement turns the 6:2 split's 0.98 request-count factor into a **1.35× throughput speedup**. These timings are hypothetical; the approximation needs calibration on MI355X. AFD shortens steps when the hidden MoE cost outweighs the extra attention and microbatch work. If FFN or communication is not fully hidden, include its exposed time as described next.
-
-## 5. When FFN or communication becomes exposed
-
-For a simplified uniform pipeline, let $F,D,R$ be whole-step FFN, dispatch, and return service times, respectively—not sums of GPU-seconds. A useful lower-bound approximation is:
-
-$$
-T_{\mathrm{afd}}\gtrsim\max\left(A,F,D,R,\frac{A+D+F+R}{m}\right),
-\qquad S=r \cdot p \cdot \frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}.
-$$
-
-The last term covers microbatch dependency cycles. Add fill/drain, synchronization, and imbalance delays for a practical estimate. This extension assumes independent stage resources and no double-counting of fused work; if both transfer directions serialize on one resource, also include its $D+R$ service constraint.
-
-The attention-limited conditions are $F,D,R\le A$ and $D+F+R\le(m-1) \cdot A$. Thus two microbatches are sufficient only if the other stages fit under one attention interval in this simplified model. $F,D,R$ depend on the global batch $N_A \cdot B_{\mathrm{afd}}$, the FFN count, microbatch size, routing, and the effective interconnect. More microbatches cannot remove an FFN throughput bottleneck.
-
-For the 6:2 example above, if $F=130$ ms and $D=R=2$ ms, the bound rises to 130 ms. The corresponding optimistic speedup falls to $S\approx r\cdot p\cdot100/130\approx0.75$ before pipeline overhead. Use measured stage timings or a schedule simulation to evaluate the exposed regime; these equations do not establish that a particular MI355X placement achieves overlap.
+The latency improvement turns the 6:2 split's 0.98 request-count factor into a **1.35× throughput speedup**. These timings are hypothetical; the approximation needs calibration on MI355X. AFD shortens steps when the hidden MoE cost outweighs the extra attention and microbatch work.
