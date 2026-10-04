@@ -1,5 +1,7 @@
 # AFD decode performance model: 8 × MI355X
 
+This accounting follows [FastAFD](https://haoailab.com/blogs/fastafd/#where-the-speedup-comes-from).
+
 Compare colocated serving and attention–FFN disaggregation (AFD) on the **same eight GPUs**, after prefill, generating one token per active request per step. This is an analytical model, not a measured MI355X speedup. Each MI355X has 288 GB HBM; GB below means $10^9$ bytes. [AMD specifications](https://www.amd.com/en/products/accelerators/instinct/mi350/mi355x.html)
 
 ## 1. Throughput and sources of speedup
@@ -37,11 +39,11 @@ $$
 \end{array}}
 $$
 
+Let’s break down these ratios:
+
 - **$r=\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}$ — batch expansion:** Moving expert weights off attention GPUs frees memory for KV cache, allowing more resident requests per attention GPU.
 - **$\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}$ — step-latency ratio:** **Aggregation** means combining routed tokens from multiple attention GPUs into larger batches for each FFN expert, which can make its matrix multiplications more efficient. Overlap lets attention on one microbatch run while another uses the FFN pool. These mechanisms can reduce AFD step latency, while larger batches and repeated microbatch work can increase it.
 - **$p=\frac{N_A}{N}$ — attention GPU fraction:** This factor counts the FFN GPUs in the total GPU budget even though they host no requests; for a 6:2 split, $p=6/8=0.75$.
-
-This accounting follows [FastAFD](https://haoailab.com/blogs/fastafd/#where-the-speedup-comes-from).
 
 Both latencies depend on batch, context, placement, and kernels. AFD wins only when $T_{\mathrm{afd}}<r \cdot p \cdot T_{\mathrm{col}}$; memory capacity alone does not establish a speedup.
 
@@ -128,7 +130,7 @@ r \cdot p \cdot
 {r \cdot T_{\rm att}+m \cdot T_{\rm dense}}}
 $$
 
-This assumes attention time scales with batch, small-kernel costs scale with microbatch count, and the remote path stays overlapped. FastAFD established this approximation on its GB200 workloads; **MI355X and V4.1 Flash require their own calibration**, especially for sparse attention and Engram. [FastAFD latency model](https://haoailab.com/blogs/fastafd/#predicting-the-gb200-speedup)
+This assumes attention time scales with batch, small-kernel costs scale with microbatch count, and the remote path stays overlapped. The source study established this approximation on its GB200 workloads; **MI355X and V4.1 Flash require their own calibration**, especially for sparse attention and Engram.
 
 Using $r=224.8/188.55\approx1.19226$, the following are **hypothetical timing scenarios**, not benchmark results. Each baseline step is 100 ms; hidden-path feasibility is assumed in each row.
 
