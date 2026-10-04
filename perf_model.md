@@ -6,49 +6,49 @@ Compare colocated serving and attention–FFN disaggregation (AFD) on the **same
 
 Let $N=N_A+N_F=8$, where $N_A$ GPUs run attention and $N_F$ run FFN/MoE. Define:
 
-- $B_v$: resident requests **per colocated GPU** ($B_{\rm vLLM}$ in the guide).
-- $B_A$: resident requests **per attention GPU** ($B_{\rm AFD}$).
-- $T_v,T_A$: wall-clock latency of a complete decode step, across all layers and microbatches, at each system's own batch size.
+- $B_{\mathrm{col}}$: resident requests **per colocated GPU**.
+- $B_{\mathrm{afd}}$: resident requests **per attention GPU**.
+- $T_{\mathrm{col}},T_{\mathrm{afd}}$: wall-clock latency of a complete decode step, across all layers and microbatches, at each system's own batch size.
 
-The global batches are $NB_v$ and $N_AB_A$. Per-GPU throughput, counting every allocated GPU, is:
+The global batches are $NB_{\mathrm{col}}$ and $N_AB_{\mathrm{afd}}$. Per-GPU throughput, counting every allocated GPU, is:
 
 $$
-tp_v=\frac{NB_v}{NT_v}=\frac{B_v}{T_v},\qquad
-tp_A=\frac{N_AB_A}{(N_A+N_F)T_A}.
+tp_{\mathrm{col}}=\frac{NB_{\mathrm{col}}}{NT_{\mathrm{col}}}=\frac{B_{\mathrm{col}}}{T_{\mathrm{col}}},\qquad
+tp_{\mathrm{afd}}=\frac{N_AB_{\mathrm{afd}}}{(N_A+N_F)T_{\mathrm{afd}}}.
 $$
 
 Therefore:
 
 $$
-\boxed{S=\frac{tp_A}{tp_v}
-=\underbrace{\frac{B_A}{B_v}}_{r:\ \text{batch expansion}}
-\underbrace{\frac{T_v}{T_A}}_{\text{step-latency ratio}}
+\boxed{S=\frac{tp_{\mathrm{afd}}}{tp_{\mathrm{col}}}
+=\underbrace{\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}}_{r:\ \text{batch expansion}}
+\underbrace{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}_{\text{step-latency ratio}}
 \underbrace{\frac{N_A}{N}}_{p:\ \text{attention GPU fraction}}.}
 $$
 
 Removing expert weights can increase $r$. Aggregation and overlap can improve the latency ratio, although larger batches and microbatch overhead increase attention-side time. The fraction $p$ charges AFD for FFN GPUs that host no requests. This accounting follows [FastAFD](https://haoailab.com/blogs/fastafd/#where-the-speedup-comes-from).
 
-Both latencies depend on batch, context, placement, and kernels. AFD wins only when $T_A<rpT_v$; memory capacity alone does not establish a speedup.
+Both latencies depend on batch, context, placement, and kernels. AFD wins only when $T_{\mathrm{afd}}<rpT_{\mathrm{col}}$; memory capacity alone does not establish a speedup.
 
 ## 2. Deriving the batch advantage
 
 Use request-parallel attention (TP=1) with expert weights sharded across all eight colocated GPUs, or across $N_F$ AFD GPUs. Non-expert weights are replicated on request-hosting GPUs. This makes the per-GPU batch definition consistent; an attention-TP layout needs different weight and KV accounting.
 
-Let $U=\eta H$ be usable HBM, $W_v,W_A$ the resident non-offloaded weights per request-hosting GPU, $E$ the total offloaded expert-weight bytes, and $K(CL)$ the per-request cache/state bytes at context length $CL$. Then:
+Let $U=\eta H$ be usable HBM, $W_{\mathrm{col}},W_{\mathrm{afd}}$ the resident non-offloaded weights per request-hosting GPU, $E$ the total offloaded expert-weight bytes, and $K(CL)$ the per-request cache/state bytes at context length $CL$. Then:
 
 $$
-B_vK(CL)+W_v+E/N\le U,
-\qquad B_AK(CL)+W_A\le U,
+B_{\mathrm{col}}K(CL)+W_{\mathrm{col}}+E/N\le U,
+\qquad B_{\mathrm{afd}}K(CL)+W_{\mathrm{afd}}\le U,
 $$
 
 $$
-B_v^{\max}=\max\!\left(0,\left\lfloor\frac{U-W_v-E/N}{K(CL)}\right\rfloor\right),\quad
-B_A^{\max}=\max\!\left(0,\left\lfloor\frac{U-W_A}{K(CL)}\right\rfloor\right).
+B_{\mathrm{col}}^{\max}=\max\!\left(0,\left\lfloor\frac{U-W_{\mathrm{col}}-E/N}{K(CL)}\right\rfloor\right),\quad
+B_{\mathrm{afd}}^{\max}=\max\!\left(0,\left\lfloor\frac{U-W_{\mathrm{afd}}}{K(CL)}\right\rfloor\right).
 $$
 
-There is **no extra division of $B_v$ by $N$**: $B_v$ is already per GPU. FFN placement must separately satisfy $E/N_F+R_F\le U$, where $R_F$ includes FFN buffers and other resident state. The reserve $(1-\eta)H$ must cover request-side runtime buffers; increase it if larger batches require more workspace.
+There is **no extra division of $B_{\mathrm{col}}$ by $N$**: $B_{\mathrm{col}}$ is already per GPU. FFN placement must separately satisfy $E/N_F+R_F\le U$, where $R_F$ includes FFN buffers and other resident state. The reserve $(1-\eta)H$ must cover request-side runtime buffers; increase it if larger batches require more workspace.
 
-With equal $W_v=W_A=W$ and ignoring integer rounding:
+With equal $W_{\mathrm{col}}=W_{\mathrm{afd}}=W$ and ignoring integer rounding:
 
 $$
 r\approx\frac{U-W}{U-W-E/N}.
@@ -82,7 +82,7 @@ Use these **explicit sizing assumptions**, rather than claiming a measured alloc
 
 The resulting cache budgets are $244.8-20-290/8=188.55$ GB for colocated GPUs and $244.8-20=224.8$ GB for attention GPUs:
 
-| Context tokens | Cache/state MB per request | $B_v^{\max}$ | $B_A^{\max}$ | $B_A/B_v$ |
+| Context tokens | Cache/state MB per request | $B_{\mathrm{col}}^{\max}$ | $B_{\mathrm{afd}}^{\max}$ | $B_{\mathrm{afd}}/B_{\mathrm{col}}$ |
 |---:|---:|---:|---:|---:|
 | 32,768 | 33.36 | 5,652 | 6,739 | 1.192 |
 | 131,072 | 120.85 | 1,560 | 1,860 | 1.192 |
@@ -94,16 +94,16 @@ This example assumes host Engram access remains covered by the runtime. If it st
 
 ## 4. Speedup when FFN and communication are hidden
 
-Decompose the measured colocated step at $B_v$:
+Decompose the measured colocated step at $B_{\mathrm{col}}$:
 
 $$
-T_v=T_{\rm att}+T_{\rm dense}+T_{\rm MoE}.
+T_{\mathrm{col}}=T_{\rm att}+T_{\rm dense}+T_{\rm MoE}.
 $$
 
 Here $T_{\rm MoE}$ covers only the expert path that will move to FFN GPUs, including its dispatch/combine. $T_{\rm dense}$ collects remaining request-side work, including shared-expert execution if retained there. With $m$ microbatches, the blog's approximation is:
 
 $$
-A\equiv T_A^{\rm hidden}\approx rT_{\rm att}+mT_{\rm dense},
+A\equiv T_{\mathrm{afd}}^{\rm hidden}\approx rT_{\rm att}+mT_{\rm dense},
 \qquad
 \boxed{S_{\rm hidden}\approx
 \frac{rp(T_{\rm att}+T_{\rm dense}+T_{\rm MoE})}
@@ -114,7 +114,7 @@ This assumes attention time scales with batch, small-kernel costs scale with mic
 
 Using $r=224.8/188.55\approx1.19226$, the following are **hypothetical timing scenarios**, not benchmark results. Each baseline step is 100 ms; hidden-path feasibility is assumed in each row.
 
-| Scenario | $N_A:N_F$ (GPUs) | $m$ | Baseline att/dense/MoE (ms) | $T_A^{\rm hidden}$ (ms) | Speedup |
+| Scenario | $N_A:N_F$ (GPUs) | $m$ | Baseline att/dense/MoE (ms) | $T_{\mathrm{afd}}^{\rm hidden}$ (ms) | Speedup |
 |---|---:|---:|---:|---:|---:|
 | Large removable MoE cost | 6:2 | 2 | 40 / 10 / 50 | 67.69 | **1.321×** |
 | Attention dominates | 6:2 | 2 | 80 / 10 / 10 | 115.38 | **0.775×** |
@@ -129,12 +129,12 @@ At 6:2, $rp\approx0.8942$, so AFD must reduce step latency by more than **10.6%*
 For a simplified uniform pipeline, let $F,D,R$ be whole-step FFN, dispatch, and return service times, respectively—not sums of GPU-seconds. A useful lower-bound approximation is:
 
 $$
-T_A\gtrsim\max\left(A,F,D,R,\frac{A+D+F+R}{m}\right),
-\qquad S=rp\frac{T_v}{T_A}.
+T_{\mathrm{afd}}\gtrsim\max\left(A,F,D,R,\frac{A+D+F+R}{m}\right),
+\qquad S=rp\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}.
 $$
 
 The last term covers microbatch dependency cycles. Add fill/drain, synchronization, and imbalance delays for a practical estimate. This extension assumes independent stage resources and no double-counting of fused work; if both transfer directions serialize on one resource, also include its $D+R$ service constraint.
 
-The attention-limited conditions are $F,D,R\le A$ and $D+F+R\le(m-1)A$. Thus two microbatches are sufficient only if the other stages fit under one attention interval in this simplified model. $F,D,R$ depend on the global batch $N_AB_A$, the FFN count, microbatch size, routing, and the effective interconnect. More microbatches cannot remove an FFN throughput bottleneck.
+The attention-limited conditions are $F,D,R\le A$ and $D+F+R\le(m-1)A$. Thus two microbatches are sufficient only if the other stages fit under one attention interval in this simplified model. $F,D,R$ depend on the global batch $N_AB_{\mathrm{afd}}$, the FFN count, microbatch size, routing, and the effective interconnect. More microbatches cannot remove an FFN throughput bottleneck.
 
 For the first scenario, if $F=110$ ms and $D=R=2$ ms, the bound rises to 110 ms and the corresponding optimistic speedup falls to **0.813×** before pipeline overhead. Use measured stage timings or a schedule simulation to evaluate the exposed regime; these equations do not establish that a particular MI355X placement achieves overlap.
