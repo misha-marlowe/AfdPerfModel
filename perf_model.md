@@ -145,6 +145,113 @@ For the contexts below, $K(CL)=11{,}520 \cdot CL+12{,}779{,}520$ bytes. The seco
 
 These are optimistic capacities: non-expert weights, per-request metadata, allocator padding, and extra retained KV blocks are omitted. The cache formula assumes separate 192-channel keys and 128-channel values, with expired sliding-window KV reclaimed. A backend that pads values or retains more history needs a larger $K(CL)$. FP8 cache scale overhead is also omitted. BF16 KV cache doubles the raw cache bytes; retaining packed MXFP4 experts instead changes $E$ and requires recalculation. Two FFN GPUs hold about 151.5 GB of expert weights each; fitting weights does not establish sufficient FFN throughput.
 
+### Frontier-model comparison: DeepSeek V4, Kimi K3, and Qwen3.8
+
+Source configurations checked **2026-10-04**. Keep the same eight MI355X GPUs, $H=244.8$ GB/GPU, request-parallel attention with TP=1, and speculation disabled. Compare the same resident expert precision in both layouts. The Qwen cases cover the large open text model, Flash-Next, and a separate dense-27B comparison below; multimodal encoders and generation are outside this analysis.
+
+First compare the **capacity ratios and latency needed to win**. These do not require assuming a particular KV-cache implementation: $K(CL)$ cancels before rounding. Absolute batches still require each backend's cache/state bytes, including recurrent state for hybrid models. The cache budgets below can be substituted into $B^{\max}=\lfloor\text{cache bytes}/K(CL)\rfloor$ at any supported context. They are not measured request capacities.
+
+#### Expert-memory inputs
+
+For each model, multiply MoE layers, routed experts per layer, three expert matrices, expert input width, and intermediate width. Exclude shared experts and speculative layers, consistently with the earlier examples.
+
+| Model and official configuration | Routed parameter calculation | Routed parameters, billions | Resident expert assumption | $E$, GB |
+|---|---|---:|---|---:|
+| [DeepSeek-V4-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/main/config.json) | $43 \cdot 256 \cdot 3 \cdot 4096 \cdot 2048$ | 277.025 | FP4 + block scales | 147.17 |
+| [DeepSeek-V4-Pro](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/config.json) | $61 \cdot 384 \cdot 3 \cdot 7168 \cdot 3072$ | 1,547.396 | FP4 + block scales | 822.05 |
+| [Kimi K3](https://huggingface.co/moonshotai/Kimi-K3/blob/main/config.json) | $92 \cdot 896 \cdot 3 \cdot 3584 \cdot 3072$ | 2,722.741 | MXFP4 + block scales | 1,446.46 |
+| [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/config.json) | $48 \cdot 512 \cdot 3 \cdot 2560 \cdot 640$ | 120.796 | FP8 + rounded scale allowance / BF16 | 121.00 / 241.59 |
+| [Qwen3.8-2.4T-A95B](https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B/blob/main/config.json) | $92 \cdot 512 \cdot 3 \cdot 8192 \cdot 2048$ | 2,370.822 | BF16 / FP8 before scales / hypothetical MXFP4 | 4,741.64 / 2,370.82 / 1,259.50 |
+
+DeepSeek's [reference implementation](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/inference/model.py) stores two FP4 weights per byte plus one one-byte scale per 32 weights. K3's configuration also specifies four-bit weights with one-byte scales per group of 32. Thus these estimates use $0.5+1/32=0.53125$ bytes per routed parameter, before backend padding or duplicate weight copies. K3's expert input width is its **3,584-dimensional latent MoE width**, not the 7,168-dimensional residual stream; its first layer is dense.
+
+For Flash-Next, the [official FP8 configuration](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8/blob/main/config.json) uses $128\times128$ weight blocks. FP32 block scales would add about 0.029 GB to its 120.796 GB of routed weights; $E=121$ GB covers that allowance. Assume its additional **51B n-gram embedding is host-resident in both layouts**, as supported by the [vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next). Include host-lookup stalls in latency if they are exposed.
+
+The large Qwen's [official FP8 version](https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B-FP8) already exceeds the node's **1,958.4 GB usable HBM in routed weights alone**. Neither BF16 nor FP8 fits this setup. Its MXFP4 row is a **conditional sizing exercise requiring quantization and kernel/quality validation**, not a claim about the official checkpoint or an available MI355X deployment.
+
+#### Ratios and break-even latency
+
+Choose the smallest FFN pool that fits routed weights alone:
+
+$$
+N_F^{\min}=\left\lceil\frac{E}{H}\right\rceil,\qquad
+r\approx\frac{H}{H-E/8},\qquad
+p=\frac{8-N_F}{8}.
+$$
+
+This is a **memory lower bound on $N_F$**, not a recommended split. FFN workspace, routing imbalance, supported expert partitions, and compute throughput can require more GPUs. In particular, a six-GPU pool does not evenly divide 896 or 512 experts; it needs a supported uneven or padded placement. All ratios below retain the simplified omission of non-expert weights; **K3 fails that approximation**, as quantified after the tables.
+
+| Model / resident expert format | Colocated cache budget, GB/GPU | $r=B_{\mathrm{afd}}/B_{\mathrm{col}}$ | Minimum $N_A:N_F$ | $p$ | $r \cdot p$ | Step-latency reduction needed to win |
+|---|---:|---:|---:|---:|---:|---:|
+| DeepSeek-V4.1-Flash, earlier 290 GB assumption | 208.55 | 1.174 | 6:2 | 0.750 | 0.880 | **>12.0%** |
+| MiMo-V2.6-Flash, FP8 | 206.93 | 1.183 | 6:2 | 0.750 | 0.887 | **>11.3%** |
+| DeepSeek-V4-Flash, FP4 | 226.40 | 1.081 | 7:1 | 0.875 | 0.946 | **>5.4%** |
+| DeepSeek-V4-Pro, FP4 | 142.04 | 1.723 | 4:4 | 0.500 | 0.862 | **>13.8%** |
+| Kimi K3, MXFP4 — formal only; TP=1 baseline does not fit | 63.99 | 3.825 | 2:6 | 0.250 | 0.956 | >4.4%, **not actionable for this layout** |
+| Qwen3.8-Flash-Next, FP8 | 229.68 | 1.066 | 7:1 | 0.875 | 0.933 | **>6.7%** |
+| Qwen3.8-Flash-Next, BF16 | 214.60 | 1.141 | 7:1 | 0.875 | 0.998 | **>0.2%**, with very little FFN workspace |
+| Qwen3.8-2.4T-A95B, hypothetical MXFP4 | 87.36 | 2.802 | 2:6 | 0.250 | 0.701 | **>29.9%**, conditional on the omitted allocations fitting |
+
+Every attention GPU has 244.8 GB of cache budget **under this approximation**. The last column is $100\cdot(1-r\cdot p)$, rounded; use the unrounded condition $T_{\mathrm{afd}}/T_{\mathrm{col}}<r\cdot p$ at the boundary. These are context-independent ratios before whole-request rounding, provided both systems use the same cache layout and reach their memory ceilings. Longer context changes absolute batches and stage timings, so it can still change the actual speedup substantially.
+
+Adding one FFN GPU makes the required latency reduction much larger:
+
+| Model / format | Minimum split | Space left per FFN GPU after routed weights, GB | Split with one extra FFN GPU | Required step-latency reduction at that split |
+|---|---:|---:|---:|---:|
+| DeepSeek-V4-Flash, FP4 | 7:1 | 97.63 | 6:2 | >18.9% |
+| DeepSeek-V4-Pro, FP4 | 4:4 | 39.29 | 3:5 | >35.4% |
+| Kimi K3, MXFP4 — formal only | 2:6 | 3.72 | 1:7 | >52.2% |
+| Qwen3.8-Flash-Next, FP8 | 7:1 | 123.80 | 6:2 | >20.1% |
+| Qwen3.8-Flash-Next, BF16 | 7:1 | 3.21 | 6:2 | >14.4% |
+| Qwen3.8-2.4T-A95B, hypothetical MXFP4 | 2:6 | 34.88 | 1:7 | >65.0% |
+
+These residual bytes are within $H$, after the same 15% physical-HBM reserve used throughout; they are available for additional FFN allocations, not proof that those allocations fit. Precision changes both systems: for example, FP8 makes the Flash-Next FFN pool much easier to fit, but also frees memory in the colocated baseline and lowers $r$.
+
+#### Where the simplification fails for K3
+
+K3 demonstrates why a large formal ratio is insufficient. Its [reference model](https://huggingface.co/moonshotai/Kimi-K3/blob/main/modeling_kimi_linear.py) has 69 KDA layers, each with full-width Q, K, V, output, and output-gate projections. Those five matrices alone require $69\cdot5\cdot7168\cdot(96\cdot128)\cdot2=60.78$ GB in BF16. Its two shared experts per MoE layer add $92\cdot3\cdot7168\cdot(2\cdot3072)\cdot2=24.31$ GB. The checkpoint excludes attention and shared experts from MXFP4 quantization.
+
+At attention TP=1, each colocated GPU would therefore need at least **180.81 + 60.78 + 24.31 = 265.90 GB**, exceeding $H=244.8$ GB before MLA weights, embeddings, KV cache, or recurrent state. **The 3.825 ratio cannot describe a feasible K3 baseline under these assumptions.** K3 needs different attention sharding, non-expert precision, placement, or a larger GPU budget; then both batch definitions and memory accounting must be recalculated. This also means the formal 4.4% threshold is not evidence that K3 is the best AFD candidate. Other large hybrid models, particularly Qwen 2.4T, also need an explicit non-expert allocation audit before their simplified ratios are used for deployment.
+
+#### Is there a chance to win?
+
+Under the simplified MoE assumptions, allocating FFN GPUs cannot by itself increase the node's total request capacity. Ignoring rounding:
+
+$$
+r\cdot p=\frac{8\cdot H-N_F\cdot H}{8\cdot H-E}\le1,
+\qquad\text{because }N_F\cdot H\ge E.
+$$
+
+Colocated serving already leaves $8\cdot H-E$ bytes for request caches across the node. AFD leaves $(8-N_F)\cdot H$ on attention GPUs; spare FFN memory is unavailable to requests in this placement. **A win therefore requires faster decode steps**, through more efficient expert execution and overlap. This conclusion specifically assumes sharded routed weights and omitted non-expert weights; replicated dense FFNs differ, as discussed below.
+
+- **DeepSeek-V4-Flash:** A useful first candidate under this model: 7:1 needs only a 5.4% step reduction. The main question is whether one GPU can serve the experts for seven attention GPUs without exposing FFN time. If two FFN GPUs are needed, the target becomes 18.9%.
+- **Qwen3.8-Flash-Next, FP8:** Another useful candidate: 7:1 needs 6.7% shorter steps and has substantial expert-side memory headroom. Measure recurrent-attention work, host n-gram lookup, and FFN service capacity. The BF16 row's 0.2% target is fragile because only 3.21 GB remains for FFN allocations.
+- **DeepSeek-V4-Pro:** Worth profiling if the colocated step spends a large fraction in routed MoE. Its 72.3% per-attention-GPU batch expansion still needs 13.8% shorter steps with half the GPUs assigned to FFN. The larger batch also raises attention-side work.
+- **Kimi K3:** Rework the placement before evaluating speedup. The memory-omission assumption fails for TP=1, and adding a seventh FFN GPU would sharply reduce request-hosting capacity even in the formal model.
+- **Qwen3.8-2.4T-A95B:** Official BF16/FP8 weights rule out this eight-GPU setup. Even a hypothetical MXFP4 expert layout requires about 30% shorter steps at 2:6, plus a successful audit of non-expert allocations. It is a more demanding candidate for this node budget.
+
+The latency hurdle is necessary, not sufficient. In Section 4's hidden-path approximation, winning also requires:
+
+$$
+\frac{T_{\rm att}}{T_{\mathrm{col}}}
++\frac{m}{r}\cdot\frac{T_{\rm dense}}{T_{\mathrm{col}}}<p.
+$$
+
+For example, with two microbatches and dense work equal to 10% of the colocated step, the removable MoE fraction must exceed about **21.0% for V4-Flash**, **21.3% for Flash-Next FP8**, or **51.6% for V4-Pro** at their minimum splits. These are hypothetical profile thresholds, not measured model timings. FFN and communication must also satisfy Section 5's exposed-stage bound; fewer FFN GPUs may improve the capacity accounting while making overlap impossible.
+
+#### Dense Qwen3.8-27B is a different comparison
+
+The [27B configuration](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json) uses dense FFNs: $64\cdot3\cdot5120\cdot17408=17.113$ billion FFN parameters, or 34.23 GB in BF16. With attention TP=1, colocated GPUs each retain a **full copy** of those FFNs, so their memory term is $E$, not $E/8$. If an AFD FFN GPU retains that same full copy:
+
+$$
+r\approx\frac{244.8}{244.8-34.22552064}=1.163,\qquad
+r\cdot p\approx1.017\quad\text{at }7:1.
+$$
+
+This can increase total request capacity slightly by removing replicated weights, unlike the sharded-MoE cases. It says nothing about whether one FFN GPU can sustain the dense computation of seven attention GPUs. Additional FFN replicas or tensor sharding change that balance; dense AFD needs its own measured execution model.
+
+Run `python3 capacity_comparison.py` to reproduce the MoE memory, ratio, and split-sensitivity tables. All figures are analytical; no AFD throughput measurements or MI355X kernel qualifications were performed.
+
 ## 4. Speedup when FFN and communication are hidden
 
 Decompose the measured colocated step at $B_{\mathrm{col}}$:
