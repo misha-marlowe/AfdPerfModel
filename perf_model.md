@@ -29,9 +29,12 @@ Therefore:
 
 $$
 \boxed{S=\frac{\mathrm{tput}_{\mathrm{afd}}}{\mathrm{tput}_{\mathrm{col}}}
-=\underbrace{\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}\vphantom{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}}_{\textbf{batch expansion}}
-\cdot \underbrace{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}\vphantom{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}}_{\textbf{step-latency ratio}}
-\cdot \underbrace{\frac{N_A}{N}\vphantom{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}}}_{\textbf{attention GPU fraction}}}
+=\begin{array}{ccccc}
+\displaystyle\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}
+&\cdot&\displaystyle\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}
+&\cdot&\displaystyle\frac{N_A}{N}\\
+\textbf{batch expansion}&&\textbf{step-latency ratio}&&\textbf{attention GPU fraction}
+\end{array}}
 $$
 
 - **$r=\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}$ — batch expansion:** Moving expert weights off attention GPUs frees memory for KV cache, allowing more resident requests per attention GPU.
