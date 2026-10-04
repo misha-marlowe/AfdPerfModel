@@ -1,7 +1,7 @@
 """Reproduce Section 3's Qwen3-235B-A22B-FP8 projection.
 
 Eight MI355X GPUs; colocated serving uses two independent DP=4/EP=4
-groups with attention TP=1. Assume equal decode-step latency in AFD.
+groups with attention TP=1. Keep the step-latency ratio explicit.
 Dimensions and source links are in perf_model.md. GB is decimal.
 Non-expert weights, backend padding, and whole-request rounding are omitted.
 Run: python3 capacity_comparison.py
@@ -23,13 +23,16 @@ def main():
     print(f"Expert weights: {float(EXPERT_BYTES / 10**9):.9f} GB")
     print(f"Colocated cache per GPU: {float(col_cache / 10**9):.9f} GB")
     print(f"AFD cache per attention GPU: {float(H / 10**9):.1f} GB\n")
-    print("| AFD attention:FFN GPUs | Batch ratio r | Attention fraction p | Projected speedup at equal step latency |")
+    print("| AFD attention:FFN GPUs | Batch ratio r | Attention fraction p | Projected speedup including step latency |")
     print("|---|---:|---:|---:|")
     for nf in (1, 2):
         p = Fraction(N - nf, N)
-        speedup = r * p
+        capacity_factor = r * p
         print(f"| {N-nf}:{nf} | {float(r):.3f} | {N-nf}/{N} "
-              f"| {float(speedup):.3f}× ({float((speedup-1)*100):+.1f}%) |")
+              f"| {float(capacity_factor):.3f} · T_col / T_afd |")
+    factor_6_2 = r * Fraction(6, 8)
+    print(f"\n6:2 break-even step reduction: {float((1-factor_6_2)*100):.2f}%")
+    print(f"6:2 speedup if AFD steps are 20% shorter: {float(factor_6_2 / Fraction(4, 5)):.3f}×")
 
 
 if __name__ == "__main__":

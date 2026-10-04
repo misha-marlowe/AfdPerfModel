@@ -94,14 +94,20 @@ r=\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}
 \approx1.302.
 $$
 
-**Assume equal decode-step latency**, $T_{\mathrm{afd}}=T_{\mathrm{col}}$, at each system's own batch size. Then projected per-GPU speedup is simply $S=r\cdot p$:
+The batch ratio and GPU allocation give the factor $r\cdot p$. **Total speedup also includes the decode-step latency ratio**, so keep that term explicit:
 
-| AFD attention:FFN GPUs | Batch ratio $r$ | Attention fraction $p$ | Projected speedup at equal step latency |
+$$
+S=r\cdot p\cdot\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}.
+$$
+
+| AFD attention:FFN GPUs | Batch ratio $r$ | Attention fraction $p$ | Projected speedup including step latency |
 |---|---:|---:|---:|
-| 7:1 | 1.302 | 7/8 | **1.139× (+13.9%)** |
-| 6:2 | 1.302 | 6/8 | **0.977× (−2.3%)** |
+| 7:1 | 1.302 | 7/8 | $1.139\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
+| 6:2 | 1.302 | 6/8 | $0.977\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
 
-At 7:1, AFD benefits from storing one expert-weight copy instead of the colocated baseline's two copies. Its single FFN GPU has about $244.8-227.15=17.65$ GB left within $H$ for additional allocations. **The projection depends on that GPU fitting the runtime and keeping up without increasing step latency**; it is not a measured speedup. The blog's reported 1.5 batch ratio comes from its GB200 setup, not this MI355X calculation.
+**The 6:2 split can still win:** it needs about a 2.35% step-latency reduction to break even. For example, if hiding MoE and communication makes AFD steps 20% shorter, $T_{\mathrm{afd}}=0.8\cdot T_{\mathrm{col}}$, giving $S\approx0.9765/0.8\approx1.221$ — a **22.1% speedup**. This is an illustrative latency assumption, not a measurement.
+
+At 7:1, AFD benefits from storing one expert-weight copy instead of the colocated baseline's two copies. Its single FFN GPU has about $244.8-227.15=17.65$ GB left within $H$ for additional allocations. Actual speedup depends on the FFN pool fitting the runtime and on the resulting step latency, including exposed communication. The blog's reported 1.5 batch ratio comes from its GB200 setup, not this MI355X calculation.
 
 Run `python3 capacity_comparison.py` to reproduce this table. The calculation uses unrounded expert bytes and ignores whole-request rounding.
 
