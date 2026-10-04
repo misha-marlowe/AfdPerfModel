@@ -134,44 +134,55 @@ For a 100 ms colocated step, AFD breaks even at about **97.65 ms**; shorter AFD 
 
 For example, if hiding MoE and communication makes AFD steps 20% shorter, $T_{\mathrm{afd}}=0.8\cdot T_{\mathrm{col}}$, giving $S\approx0.976533/0.8\approx1.221$ — a **22.1% speedup**. This is an illustrative latency assumption, not a measurement.
 
-At 7:1, AFD benefits from storing one expert-weight copy instead of the colocated baseline's two copies. Its single FFN GPU has about $244.8-227.15=17.65$ GB left within $H$ for additional allocations. Actual speedup depends on the FFN pool fitting the runtime and on the resulting step latency, including exposed communication. The blog's reported 1.5 batch ratio comes from its GB200 setup, not this MI355X calculation.
+At 7:1, AFD stores one expert-weight copy instead of the colocated baseline's two copies. Its single FFN GPU has about $244.8-227.15=17.65$ GB left within $H$ for additional allocations.
 
 Run `python3 capacity_comparison.py` to reproduce this table. The calculation uses unrounded expert bytes and ignores whole-request rounding.
 
-## 4. Speedup when FFN and communication are hidden
+**For a given split, speedup depends on the latency ratio $T_{\mathrm{col}}/T_{\mathrm{afd}}$.** The next section estimates this ratio when AFD hides MoE and communication behind attention.
 
-Decompose the measured colocated step at $B_{\mathrm{col}}$:
+## 4. The step-latency ratio when MoE and communication are hidden
+
+AFD overlaps one microbatch's MoE and communication with another microbatch's attention. When this overlap fully hides the FFN path, that work no longer adds to the decode-step latency.
+
+Start with the colocated step at $B_{\mathrm{col}}$:
 
 $$
 T_{\mathrm{col}}=T_{\rm att}+T_{\rm dense}+T_{\rm MoE}.
 $$
 
-Here $T_{\rm MoE}$ covers only the expert path that will move to FFN GPUs, including its dispatch/combine. $T_{\rm dense}$ collects remaining request-side work, including shared-expert execution if retained there. With $m$ microbatches, the blog's approximation is:
+- $T_{\rm att}$: attention-kernel time.
+- $T_{\rm dense}$: remaining request-side work, including projections, routing, norms, KV updates, and any retained shared experts.
+- $T_{\rm MoE}$: the expert path moved to FFN GPUs, including dispatch and combine.
+
+With $m$ microbatches, estimate the remaining attention-side time as $A$:
 
 $$
-A\equiv T_{\mathrm{afd}}^{\rm hidden}\approx r \cdot T_{\rm att}+m \cdot T_{\rm dense},
+T_{\mathrm{afd}}^{\rm hidden}\approx A
+=r\cdot T_{\rm att}+m\cdot T_{\rm dense}.
+$$
+
+The factor $r$ accounts for the larger batch: this approximation assumes attention time grows in proportion to KV traffic. The factor $m$ accounts for repeating the small request-side kernels for each microbatch. Thus the latency ratio is:
+
+$$
+\boxed{\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}^{\rm hidden}}
+\approx\frac{T_{\rm att}+T_{\rm dense}+T_{\rm MoE}}
+{r\cdot T_{\rm att}+m\cdot T_{\rm dense}}}
+$$
+
+**Example:** keep the Qwen 6:2 split, $r\approx1.302044$, and use two microbatches. Suppose a colocated step takes $40+10+50=100$ ms for attention, dense work, and MoE respectively. If MoE and communication are fully hidden:
+
+$$
+T_{\mathrm{afd}}^{\rm hidden}\approx1.302044\cdot40+2\cdot10=72.08\text{ ms},
 $$
 
 $$
-\boxed{S_{\rm hidden}\approx
-r \cdot p \cdot
-\frac{T_{\rm att}+T_{\rm dense}+T_{\rm MoE}}
-{r \cdot T_{\rm att}+m \cdot T_{\rm dense}}}
+\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}^{\rm hidden}}
+\approx\frac{100}{72.08}=1.387,
+\qquad
+S\approx0.976533\cdot\frac{100}{72.08}=1.355.
 $$
 
-This assumes attention time scales with batch, small-kernel costs scale with microbatch count, and the remote path stays overlapped. The source study established this approximation on its GB200 workloads; **MI355X requires its own calibration**.
-
-Using the Qwen example's $r\approx1.30204$, the following are **hypothetical timing scenarios**, not benchmark results. Each baseline step is 100 ms; hidden-path feasibility is assumed in each row.
-
-| Scenario | $N_A:N_F$ (GPUs) | $m$ | Baseline att/dense/MoE (ms) | $T_{\mathrm{afd}}^{\rm hidden}$ (ms) | Speedup |
-|---|---:|---:|---:|---:|---:|
-| Large removable MoE cost | 7:1 | 2 | 40 / 10 / 50 | 72.08 | **1.581×** |
-| Attention dominates | 7:1 | 2 | 80 / 10 / 10 | 124.16 | **0.918×** |
-| Dense overhead is substantial | 7:1 | 2 | 20 / 30 / 50 | 86.04 | **1.324×** |
-| More GPUs dedicated to FFN | 6:2 | 2 | 40 / 10 / 50 | 72.08 | **1.355×** |
-| Extra microbatches without extra hiding | 7:1 | 4 | 40 / 10 / 50 | 92.08 | **1.237×** |
-
-At 7:1, $r\cdot p\approx1.1393$, so AFD wins while $T_{\mathrm{afd}}<1.1393\cdot T_{\mathrm{col}}$. At 6:2, the break-even latency reduction is $(1-0.976533)\cdot100\%\approx2.35\%$, as derived in Section 3. More FFN GPUs can make overlap feasible, but reduce the fraction hosting requests.
+The latency improvement turns the 6:2 split's 0.977 request-count factor into a **1.355× throughput speedup**. These timings are hypothetical; the approximation needs calibration on MI355X. AFD shortens steps when the hidden MoE cost outweighs the extra attention and microbatch work. If FFN or communication is not fully hidden, include its exposed time as described next.
 
 ## 5. When FFN or communication becomes exposed
 
@@ -186,4 +197,4 @@ The last term covers microbatch dependency cycles. Add fill/drain, synchronizati
 
 The attention-limited conditions are $F,D,R\le A$ and $D+F+R\le(m-1) \cdot A$. Thus two microbatches are sufficient only if the other stages fit under one attention interval in this simplified model. $F,D,R$ depend on the global batch $N_A \cdot B_{\mathrm{afd}}$, the FFN count, microbatch size, routing, and the effective interconnect. More microbatches cannot remove an FFN throughput bottleneck.
 
-For the first scenario, if $F=130$ ms and $D=R=2$ ms, the bound rises to 130 ms and the corresponding optimistic speedup falls to **0.876×** before pipeline overhead. Use measured stage timings or a schedule simulation to evaluate the exposed regime; these equations do not establish that a particular MI355X placement achieves overlap.
+For the 6:2 example above, if $F=130$ ms and $D=R=2$ ms, the bound rises to 130 ms. The corresponding optimistic speedup falls to $S\approx0.976533\cdot100/130\approx0.751$ before pipeline overhead. Use measured stage timings or a schedule simulation to evaluate the exposed regime; these equations do not establish that a particular MI355X placement achieves overlap.
