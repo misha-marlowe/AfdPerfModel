@@ -86,12 +86,12 @@ E=94\cdot128\cdot3\cdot4096\cdot1536\cdot\left(1+\frac{4}{128\cdot128}\right)
 \approx227.15\text{ GB}.
 $$
 
-Use $H=244.8$ GB of usable HBM per GPU (85% of 288 GB), neglecting non-expert weights as in Section 2. A colocated GPU has $244.8-227.15/4\approx188.01$ GB for cache; an AFD attention GPU has 244.8 GB. Therefore:
+Use $H=244.8$ GB of usable HBM per GPU (85% of 288 GB), neglecting non-expert weights as in Section 2. Calculations retain full precision; displayed numbers have at most two decimal places. A colocated GPU has $244.8-227.15/4\approx188.01$ GB for cache; an AFD attention GPU has 244.8 GB. Therefore:
 
 $$
 r=\frac{B_{\mathrm{afd}}}{B_{\mathrm{col}}}
 \approx\frac{244.8}{244.8-227.15/4}
-\approx1.302.
+\approx1.30.
 $$
 
 The batch ratio and GPU allocation give the factor $r\cdot p$. **Total speedup also includes the decode-step latency ratio**, so keep that term explicit:
@@ -102,37 +102,36 @@ $$
 
 | AFD attention:FFN GPUs | Batch ratio $r$ | Attention fraction $p$ | Projected speedup including step latency |
 |---|---:|---:|---:|
-| 7:1 | 1.302 | 7/8 | $1.139\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
-| 6:2 | 1.302 | 6/8 | $0.977\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
+| 7:1 | 1.30 | 7/8 | $1.14\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
+| 6:2 | 1.30 | 6/8 | $0.98\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
 
-**For the 6:2 split, start with the total request counts.** Six AFD attention GPUs host requests, compared with all eight colocated GPUs. Using the unrounded expert bytes above gives $r\approx1.302044$, so the ratio of total resident requests is:
+**For the 6:2 split, start with the total request counts.** Six AFD attention GPUs host requests, compared with all eight colocated GPUs. Using the expert bytes above, the ratio of total resident requests is:
 
 $$
 \frac{6\cdot B_{\mathrm{afd}}}{8\cdot B_{\mathrm{col}}}
 =\frac{6}{8}\cdot r
-\approx0.75\cdot1.302044
-\approx0.976533.
+\approx97.65\%.
 $$
 
-AFD therefore generates about 97.6533% as many tokens per step. To match colocated throughput, it must finish each step in 97.6533% of the time. Set $S=1$ to find this break-even point:
+AFD therefore generates about 97.65% as many tokens per step. To match colocated throughput, it must finish each step in 97.65% of the time. Set $S=1$ to find this break-even point:
 
 $$
-1=0.976533\cdot\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}
+1=r\cdot p\cdot\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}
 \quad\Longrightarrow\quad
-\frac{T_{\mathrm{afd}}}{T_{\mathrm{col}}}=0.976533.
+\frac{T_{\mathrm{afd}}}{T_{\mathrm{col}}}=r\cdot p\approx97.65\%.
 $$
 
 The required percentage reduction in step latency is therefore:
 
 $$
 \frac{T_{\mathrm{col}}-T_{\mathrm{afd}}}{T_{\mathrm{col}}}\cdot100\%
-=(1-0.976533)\cdot100\%
-\approx2.35\%.
+=(1-r\cdot p)\cdot100\%
+\approx100\%-97.65\%=2.35\%.
 $$
 
-For a 100 ms colocated step, AFD breaks even at about **97.65 ms**; shorter AFD steps produce a speedup. The table rounds the request-count factor to 0.977; the 2.35% calculation uses the unrounded value.
+For a 100 ms colocated step, AFD breaks even at about **97.65 ms**; shorter AFD steps produce a speedup.
 
-For example, if hiding MoE and communication makes AFD steps 20% shorter, $T_{\mathrm{afd}}=0.8\cdot T_{\mathrm{col}}$, giving $S\approx0.976533/0.8\approx1.221$ — a **22.1% speedup**. This is an illustrative latency assumption, not a measurement.
+For example, if hiding MoE and communication makes AFD steps 20% shorter, $T_{\mathrm{afd}}=0.8\cdot T_{\mathrm{col}}$, giving $S\approx r\cdot p/0.8\approx1.22$ — a **22.1% speedup**. This is an illustrative latency assumption, not a measurement.
 
 At 7:1, AFD stores one expert-weight copy instead of the colocated baseline's two copies. Its single FFN GPU has about $244.8-227.15=17.65$ GB left within $H$ for additional allocations.
 
@@ -169,20 +168,20 @@ $$
 {r\cdot T_{\rm att}+m\cdot T_{\rm dense}}}
 $$
 
-**Example:** keep the Qwen 6:2 split, $r\approx1.302044$, and use two microbatches. Suppose a colocated step takes $40+10+50=100$ ms for attention, dense work, and MoE respectively. If MoE and communication are fully hidden:
+**Example:** keep the Qwen 6:2 split, $r\approx1.30$, and use two microbatches. Suppose a colocated step takes $40+10+50=100$ ms for attention, dense work, and MoE respectively. If MoE and communication are fully hidden:
 
 $$
-T_{\mathrm{afd}}^{\rm hidden}\approx1.302044\cdot40+2\cdot10=72.08\text{ ms},
+T_{\mathrm{afd}}^{\rm hidden}\approx r\cdot40+2\cdot10\approx72.08\text{ ms},
 $$
 
 $$
 \frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}^{\rm hidden}}
-\approx\frac{100}{72.08}=1.387,
+\approx\frac{100}{72.08}\approx1.39,
 \qquad
-S\approx0.976533\cdot\frac{100}{72.08}=1.355.
+S\approx r\cdot p\cdot\frac{100}{72.08}\approx1.35.
 $$
 
-The latency improvement turns the 6:2 split's 0.977 request-count factor into a **1.355× throughput speedup**. These timings are hypothetical; the approximation needs calibration on MI355X. AFD shortens steps when the hidden MoE cost outweighs the extra attention and microbatch work. If FFN or communication is not fully hidden, include its exposed time as described next.
+The latency improvement turns the 6:2 split's 0.98 request-count factor into a **1.35× throughput speedup**. These timings are hypothetical; the approximation needs calibration on MI355X. AFD shortens steps when the hidden MoE cost outweighs the extra attention and microbatch work. If FFN or communication is not fully hidden, include its exposed time as described next.
 
 ## 5. When FFN or communication becomes exposed
 
@@ -197,4 +196,4 @@ The last term covers microbatch dependency cycles. Add fill/drain, synchronizati
 
 The attention-limited conditions are $F,D,R\le A$ and $D+F+R\le(m-1) \cdot A$. Thus two microbatches are sufficient only if the other stages fit under one attention interval in this simplified model. $F,D,R$ depend on the global batch $N_A \cdot B_{\mathrm{afd}}$, the FFN count, microbatch size, routing, and the effective interconnect. More microbatches cannot remove an FFN throughput bottleneck.
 
-For the 6:2 example above, if $F=130$ ms and $D=R=2$ ms, the bound rises to 130 ms. The corresponding optimistic speedup falls to $S\approx0.976533\cdot100/130\approx0.751$ before pipeline overhead. Use measured stage timings or a schedule simulation to evaluate the exposed regime; these equations do not establish that a particular MI355X placement achieves overlap.
+For the 6:2 example above, if $F=130$ ms and $D=R=2$ ms, the bound rises to 130 ms. The corresponding optimistic speedup falls to $S\approx r\cdot p\cdot100/130\approx0.75$ before pipeline overhead. Use measured stage timings or a schedule simulation to evaluate the exposed regime; these equations do not establish that a particular MI355X placement achieves overlap.
