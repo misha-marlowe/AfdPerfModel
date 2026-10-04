@@ -31,7 +31,10 @@ def main():
         print(f"| {N-nf}:{nf} | {float(r):.3f} | {N-nf}/{N} "
               f"| {float(capacity_factor):.3f} · T_col / T_afd |")
     factor_6_2 = r * Fraction(6, 8)
-    print(f"\n6:2 break-even step reduction: {float((1-factor_6_2)*100):.2f}%")
+    print(f"\n6:2 total request ratio: r · 6/8 = {float(r):.9f} · 0.75 = {float(factor_6_2):.9f}")
+    print(f"At S = 1, T_afd / T_col = {float(factor_6_2):.9f}")
+    print(f"Break-even step reduction: (1 - {float(factor_6_2):.9f}) · 100% = {float((1-factor_6_2)*100):.2f}%")
+    print(f"For a 100 ms colocated step, AFD breaks even at {float(factor_6_2*100):.2f} ms.")
     print(f"6:2 speedup if AFD steps are 20% shorter: {float(factor_6_2 / Fraction(4, 5)):.3f}×")
 
 

@@ -105,7 +105,34 @@ $$
 | 7:1 | 1.302 | 7/8 | $1.139\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
 | 6:2 | 1.302 | 6/8 | $0.977\cdot T_{\mathrm{col}}/T_{\mathrm{afd}}$ |
 
-**The 6:2 split can still win:** it needs about a 2.35% step-latency reduction to break even. For example, if hiding MoE and communication makes AFD steps 20% shorter, $T_{\mathrm{afd}}=0.8\cdot T_{\mathrm{col}}$, giving $S\approx0.9765/0.8\approx1.221$ — a **22.1% speedup**. This is an illustrative latency assumption, not a measurement.
+**For the 6:2 split, start with the total request counts.** Six AFD attention GPUs host requests, compared with all eight colocated GPUs. Using the unrounded expert bytes above gives $r\approx1.302044$, so the ratio of total resident requests is:
+
+$$
+\frac{6\cdot B_{\mathrm{afd}}}{8\cdot B_{\mathrm{col}}}
+=\frac{6}{8}\cdot r
+\approx0.75\cdot1.302044
+\approx0.976533.
+$$
+
+AFD therefore generates about 97.6533% as many tokens per step. To match colocated throughput, it must finish each step in 97.6533% of the time. Set $S=1$ to find this break-even point:
+
+$$
+1=0.976533\cdot\frac{T_{\mathrm{col}}}{T_{\mathrm{afd}}}
+\quad\Longrightarrow\quad
+\frac{T_{\mathrm{afd}}}{T_{\mathrm{col}}}=0.976533.
+$$
+
+The required percentage reduction in step latency is therefore:
+
+$$
+\frac{T_{\mathrm{col}}-T_{\mathrm{afd}}}{T_{\mathrm{col}}}\cdot100\%
+=(1-0.976533)\cdot100\%
+\approx2.35\%.
+$$
+
+For a 100 ms colocated step, AFD breaks even at about **97.65 ms**; shorter AFD steps produce a speedup. The table rounds the request-count factor to 0.977; the 2.35% calculation uses the unrounded value.
+
+For example, if hiding MoE and communication makes AFD steps 20% shorter, $T_{\mathrm{afd}}=0.8\cdot T_{\mathrm{col}}$, giving $S\approx0.976533/0.8\approx1.221$ — a **22.1% speedup**. This is an illustrative latency assumption, not a measurement.
 
 At 7:1, AFD benefits from storing one expert-weight copy instead of the colocated baseline's two copies. Its single FFN GPU has about $244.8-227.15=17.65$ GB left within $H$ for additional allocations. Actual speedup depends on the FFN pool fitting the runtime and on the resulting step latency, including exposed communication. The blog's reported 1.5 batch ratio comes from its GB200 setup, not this MI355X calculation.
 
@@ -144,7 +171,7 @@ Using the Qwen example's $r\approx1.30204$, the following are **hypothetical tim
 | More GPUs dedicated to FFN | 6:2 | 2 | 40 / 10 / 50 | 72.08 | **1.355×** |
 | Extra microbatches without extra hiding | 7:1 | 4 | 40 / 10 / 50 | 92.08 | **1.237×** |
 
-At 7:1, $r\cdot p\approx1.1393$, so AFD wins while $T_{\mathrm{afd}}<1.1393\cdot T_{\mathrm{col}}$. At 6:2, $r\cdot p\approx0.9765$, requiring about a **2.35% step-latency reduction** to break even. More FFN GPUs can make overlap feasible, but reduce the fraction hosting requests.
+At 7:1, $r\cdot p\approx1.1393$, so AFD wins while $T_{\mathrm{afd}}<1.1393\cdot T_{\mathrm{col}}$. At 6:2, the break-even latency reduction is $(1-0.976533)\cdot100\%\approx2.35\%$, as derived in Section 3. More FFN GPUs can make overlap feasible, but reduce the fraction hosting requests.
 
 ## 5. When FFN or communication becomes exposed
 
